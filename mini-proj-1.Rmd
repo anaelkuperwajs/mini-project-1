@@ -1,0 +1,238 @@
+---
+title: "Mini-Project 1"
+author: Juliet Kelson and Anael Kuperwajs Cohen
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+\
+\
+
+
+## Part 1: Ready the data
+
+```{r warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(caret)
+```
+
+```{r}
+airbnb <- read.csv("NYC_airbnb_kaggle.csv")
+nbhd <- read.csv("NYC_nbhd_kaggle.csv")
+```
+
+
+```{r}
+airbnb_all <- left_join(airbnb, nbhd, by=c("neighbourhood_cleansed"= "neighbourhood"))
+```
+
+```{r}
+airbnb_all <- airbnb_all %>% 
+  filter(price <1000)
+
+amenities <- airbnb_all %>% select(amenities, id)
+amenities <- amenities %>% 
+  mutate(amenities_count = stringr::str_count(amenities, ",")) %>% 
+  mutate(amenities_count = if_else(amenities != "{}", amenities_count+1, 0))
+
+airbnb_all <- airbnb_all %>% 
+  left_join(amenities, by="id")
+
+airbnb_ints <- airbnb_all%>% 
+  select(price, latitude, longitude, accommodates, bathrooms, bedrooms, beds, guests_included, minimum_nights, maximum_nights,
+         number_of_reviews, review_scores_rating, amenities_count) 
+cor(airbnb_ints)
+
+airbnb_all <- airbnb_all %>%
+  select(-id, -host_response_time, -host_response_rate, -host_has_profile_pic, -calendar_updated, -require_guest_profile_picture, -availability_30, -is_location_exact, -guests_included, -beds, -amenities.x, -amenities.y, -minimum_nights, -maximum_nights, -cancellation_policy, -reviews_per_month, -bed_type, -is_business_travel_ready, -square_feet)
+
+airbnb_all <- airbnb_all %>% 
+  mutate(neighbourhood_cleansed = as.factor(neighbourhood_cleansed))
+```
+
+
+```{r}
+set.seed(253)
+
+airbnb_sample <- sample_n(airbnb_all, 5000)
+airbnb_int_sample <- sample_n(airbnb_ints, 5000)
+```
+
+
+\
+\
+\
+\
+\
+\
+
+
+
+## Part 2: Analyze
+
+Get to know the data:
+```{r}
+summary(airbnb_sample)
+
+airbnb_sample %>%
+  ggplot(aes(x = review_scores_rating, y = price)) +
+  geom_jitter(aes(color = accommodates, alpha=.5)) +
+  facet_wrap(vars(host_is_superhost))
+
+airbnb_sample %>%
+  ggplot(aes(x = review_scores_rating, y = price)) +
+  geom_point(aes(color = room_type, alpha=.5)) +
+  facet_wrap(vars(neighbourhood_group))
+
+impute_info <- airbnb_sample %>% 
+  select(-price) %>% 
+  preProcess(method="knnImpute")
+
+impute_info_int <- airbnb_ints %>% 
+  select(-price) %>% 
+  preProcess(method="knnImpute")
+
+airbnb_sample_complete <- predict(impute_info, newdata=airbnb_sample)
+airbnb_int_sample_complete <- predict(impute_info_int, newdata=airbnb_int_sample)
+```
+
+In preparing our data, we removed predictors that were repetitive, such as keeping accommodates and removing guests_included. We also removed predictors that we suspected wouldn't help predict price, such as id or host_has_profile_pic. Looking at the correlation plot also helped us determine what were the important predictors that influenced price. After this process, we remained with 15 variables out of the original 31. After studying the data and looking at various plots, a few insights about the price of Airbnb listings surfaced. To begin with, being a superhost does not seem to affect price. There are more listings that are not from superhosts, yet both true and false for this predictor has the same trend, there are more cheap listings and less expensive ones. The review score affects price slightly, but not in a very significant way. The reviews at or near 100 vary in price, yet the most expensive listings are all high ratings. There is a similar trend with accommodates, mostly the more expensive listings accommodate a large number of people. Furthermore, the more expensive listings are entire home/apts, while the less expensive listings are private rooms or shared rooms.
+
+
+
+Predictive model attempts:
+```{r warning = FALSE, message = FALSE, fig.width = 8, fig.height = 12}
+#  airbnb_please_work <-
+#    airbnb_sample_complete %>% select(
+#   price,
+#   neighbourhood_group,
+#   review_scores_rating,
+#   amenities_count,
+#   bathrooms,
+#   property_type,
+#   host_is_superhost,
+#   accommodates,
+#   bedrooms,
+#   number_of_reviews
+#   )
+# 
+#   gam_model <- train(
+#   price ~ .,
+#   data = airbnb_please_work,
+#   method = "gamLoess",
+#   tuneGrid = data.frame(span = 0.5, degree = 1),
+#   trControl = trainControl(
+#   method = "cv",
+#   number = 10,
+#   selectionFunction = "best"
+#   ),
+#   metric = "MAE",
+#   na.action = na.omit
+#   )
+# 
+# par(mfrow = c(4,3))
+# plot(gam_model$finalModel)
+# 
+# gam_model$results
+# 
+```
+
+
+```{r}
+# model_data <- data.frame(model.matrix(price ~ accommodates + host_is_superhost + neighbourhood_group - 1, data = airbnb_sample_complete)) %>%
+#    mutate(price = airbnb_sample_complete$price)
+# 
+# knn_model <- train(
+#   price ~ .,
+#   data = airbnb_sample_complete,
+#   preProcess = c("center","scale"),
+#   method = "knn",
+#   tuneGrid = data.frame(k = seq(1, 80, by=5)),
+#   trControl = trainControl(method = "cv", number = 10, selectionFunction = "best"),
+#   metric = "MAE",
+#   na.action = na.omit
+# )
+# 
+# 
+# knn_model$results %>% filter(k==knn_model$bestTune$k)
+# plot(knn_model)
+```
+
+Final predictive model:
+```{r}
+lambda_grid <- 10^seq(-8, 4, length = 100)
+set.seed(253)
+
+lasso_model <- train(
+  price ~ .,
+  data = airbnb_sample_complete,
+  method = "glmnet",
+  trControl = trainControl(method = "cv", number = 10, selectionFunction = "best"),
+  tuneGrid = data.frame(alpha = 1, lambda = lambda_grid),
+  metric = "MAE",
+  na.action = na.omit
+)
+
+coef(lasso_model$finalModel, lasso_model$bestTune$lambda)
+
+lasso_model$results %>% filter(lambda == lasso_model$bestTune$lambda)
+
+table_resids <- data.frame(residuals = resid(lasso_model), fitted = fitted(lasso_model))
+
+ggplot(table_resids, aes(x=fitted, y=residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0)
+```
+
+Before settling on our final model, we looked at multiple different paths. The two that we considered included GAM and KNN. The GAM model does not do well with factors, and the data that we are looking has many categorical predictors. This can be seen in the GAM model plots that are linear. We tried to take out all the categorical predictors and got very poor results. The other model that we studied, KNN, also doesn't do well with categorical predictors. When taking them out, however, we got better results than with the GAM, yet still not amazing results. The final model we chose was LASSO because we can use all the factors in it and we got slighlty better results than the KNN model. While the difference in results isn't too large, LASSO is a much simpler model and less computationally expensive than KNN. Therefore, the choice between similar LASSO and KNN results was clear.
+
+We made many different attempts in our approach before settling on one. This included looking at different combinations of predictors and different tuning parameters. For LASSO, the final set of predictors was one that wasn't too large and didn't contain repeat or useless variables. The tuning parameter that we chose was "best", in order to get the best possible results. This selection also ended in better results than "oneSE". For KNN and LASSO we tried a wide range of numbers for K and for Lambda, respectively, looking broadly and at many options. The numbers we settled on gave us the best possible predictive model. The method we chose was 10-fold CV, because the number 10 for this process is a standard and cross-validation allows us to test a model we trained on our data to verify that it is not overfit.
+
+The R^2 for our LASSO model is approximately 0.532 and the MAE is 45.692. These results are the best ones we discovered among all our models while simultaneously being a computationally efficient model. We also used the residual plot to evaluate if the model is wrong. While this is the best model that we found for this data, the residual plot shows that it is not perfect. The residual plot is not completely random or balanced above and below the y axis. We would hope, normally, for a better residual plot, yet this is a pretty average plot and one we can accept because the other possibilities were much worse.
+
+
+\
+\
+\
+\
+\
+\
+
+
+
+## Part 3: Summarize
+
+Many of the predictors did not have a strong correlation to price, as seen in our correlation model in part 1. While the model did not explain all of the data and is not as strong as we hoped, it is still fairly good in relation to the data that we were given. There are also many elements to Airbnb that we cannot control in this dataset because we cannot describe them in predictors, such as the profile picture that users have.
+
+Although there are some difficulties in analyzing this dataset, we can still see that some predictors significantly influence price. For example, a shared room, a room in Manhattan, and a time share all had large influences. The most expensive burrough of New York is Manhattan, and the influence of this factor reflected that. On the other hand, having to share a room meant the price was cheaper. This happens to be an important factor for people when selecting where to spend the night in a foreign location. Lastly, a time share would be more similar to renting an entire house, so it makes sense that the property type being a time share would make the price of the listing more expensive.
+
+```{r}
+airbnb_sample_complete %>% 
+  filter(price < 1000, neighbourhood_group == "Manhattan") %>% 
+  filter(room_type %in% c("Shared room")) %>% 
+  summarize(min(price), max(price), median(price))
+
+airbnb_sample_complete %>% 
+  filter(price < 1000, neighbourhood_group != "Manhattan") %>% 
+  filter(room_type %in% c("Shared room")) %>% 
+  summarize(min(price), max(price), median(price))
+```
+
+Looking at example listings in the dataset prove that the predictor of the burrough Manhattan significantly affects the price. When looking at a room being in Manhattan vs another burrough while controlling for the room type being a shared room the median price is higher for a room in Manhattan. The median is $60 in Manhattan and $35 outside of Manhattan. Furthermore, the minimum is 0 outside of the burrough and $30 inside. The max price does not make sense here because it is higher outside of Manhattan, but that could be an outlier because the other two measurements prove that being in Manhattan has, on average, higher priced listings.
+
+\
+\
+\
+\
+\
+\
+
+
+
+## Part 4: Contributions
+
+Juliet Kelson and Anael Kuperwajs Cohen both worked on this project evenly.
+
